@@ -1,11 +1,14 @@
 Name
+====
     ngx_zeromq - an upstream module that talks to
         mysql, zeromq, and sqlite3 by libzeromq
 
 Status
+======
     This module is in development!
 
 Synopsis
+========
 
     http {
         ...
@@ -34,6 +37,8 @@ Synopsis
     }
 
 Description
+===========
+
     This is an nginx upstream module integrating libzeromq
     into nginx in an non-blocking and streamming way.
 
@@ -87,6 +92,7 @@ Description
     pool even if the pool is already full.
 
 Caveats
+=======
 
     * Other usptream modules like "upstream_hash" and
       "upstream_keepalive" MUST NOT be used with this module
@@ -100,6 +106,7 @@ Caveats
       "zeromq_pass" directive.
 
 Directives
+==========
 
     zeromq_server <host>:<port>.
 
@@ -114,6 +121,7 @@ Directives
         the larger the buffer, the less streammy the outputing process will be.
 
 Output (TODO)
+=============
 
     This module generates binary query results in a format
     that will be shared among the various nginx database

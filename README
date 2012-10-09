@@ -1,0 +1,431 @@
+Name
+    ngx_drizzle - an upstream module that talks to
+        mysql, drizzle, and sqlite3 by libdrizzle
+
+Status
+    This module is already considered production-ready but it's
+    required to patch libdrizzle-0.8 using the following
+    patch in order to fix two serious bug in it:
+
+      http://agentzh.org/misc/nginx/libdrizzle-0.8-parsebug_and_mac_fixes.patch
+
+    This patch is expected to be included in the next
+    official release of libdrizzle.
+
+    We need your help! If you find this module useful and/or
+    interesting, please consider joining the development!
+    Commit bit can be freely delivered at your request ;)
+
+Synopsis
+
+    http {
+        ...
+
+        upstream cluster {
+            # simple round-robin
+            drizzle_server 127.0.0.1:3306 dbname=test
+                 password=some_pass user=monty protocol=mysql;
+            drizzle_server 127.0.0.1:1234 dbname=test2
+                 password=pass user=bob protocol=drizzle;
+        }
+
+        upstream backend {
+            drizzle_server 127.0.0.1:3306 dbname=test
+                 password=some_pass user=monty protocol=mysql;
+        }
+
+        server {
+            location /mysql {
+                set $my_sql 'select * from cats';
+                drizzle_query $my_sql;
+
+                drizzle_pass backend;
+
+                drizzle_connect_timeout 500 ms; # default 60 s
+                drizzle_send_query_timeout 2 s; # default 60 s
+                drizzle_recv_cols 1 s; # default 60 s
+                drizzle_recv_rows 1 s; # default 60 s
+            }
+            ...
+        }
+    }
+
+Description
+    This is an nginx upstream module integrating libdrizzle
+    ( https://launchpad.net/libdrizzle ) into nginx in an
+    non-blocking and streamming way.
+
+    Essentially it provides a very efficient and flexible way
+    for nginx internals to access mysql, drizzle, sqlite3,
+    as well as other RDBMS's that support the drizzle protocol
+    or mysql protocol. Also it can serve as a direct REST
+    interface to those RDBMS backends.
+
+    It also has a builtin per-worker connection pool
+    mechanism.
+
+    Here's a sample configuration:
+
+        upstream backend {
+            drizzle_server 127.0.0.1:3306 dbname=test
+                 password=some_pass user=monty protocol=mysql;
+            drizzle_keepalive max=100 mode=single overflow=reject;
+        }
+
+    The drizzle_server directive supports the following options:
+
+        * user
+            mysql user name for login
+
+        * password
+            Specify mysql password for login.
+
+        * dbname
+            Specify default mysql database for the connection.
+            Note that mysql does allow referecing tables belonging to different
+            databases by qualifying table names with
+            database names.
+
+        * protocol
+            Specify which wire protocol to use, "drizzle" or "mysql".
+            Default to "drizzle".
+
+        * charset
+            Explicitly specify the charset for the mysql connection.
+            Setting this option to a non-empty value will
+            make ngx_drizzle send out a "set names 'user_charset'" query
+            right after the mysql connection is established.
+            If the default character encoding of the mysql connection
+            is already what you want, you needn't set this option
+            because it has extra runtime cost. Here is a small
+            example:
+
+                drizzle_server foo.bar.com:3306 user=monty password=some_pass
+                    dbname=test protocol=mysql
+                    charset=utf8;
+
+            Note that for the mysql server, "utf-8" is not a valid
+            encoding name while "utf8" is ;)
+
+    The drizzle_keepalive directive has the following options:
+
+        * max=<num>
+            Specify the capacity of the connection pool for
+            the current upstream block. The <num> value MUST
+            be non-zero. If set to 0, it effectively disables
+            the connection pool. And this is the default
+            if no "drizzle_keepalive" directive is specified.
+
+        * mode=<mode>
+            This supports two values, "single" and "multi".
+            "single" mode means the pool does not distinguish
+            various drizzle servers in the current ustream
+            block while "multi" means the pool will merely
+            reuse connections which have identical server
+            host names and ports. Note that it will igore
+            differences between dbnames or users.
+            Default to "single".
+
+        * overflow=<action>
+            This option specifies what to do when the
+            connection pool is already full while new
+            database connection is required. Either "reject"
+            (without quotes) or "ignore" can be specified.
+            In case of "reject", it will reject the current
+            request, and returns "503 Service Unavaliable"
+            error page. For "ignore", this module will
+            go on creating a new DB connection.
+
+    For now, the connection pool uses a simple LIFO algorithm
+    to assign idle connections in the pool. That is,
+    most recently (successfully) used connections will be
+    reused first the next time. And new idle connections
+    will always replace the oldest idle connections in the
+    pool even if the pool is already full.
+
+Caveats
+
+    * Other usptream modules like "upstream_hash" and
+      "upstream_keepalive" MUST NOT be used with this module
+      in a single upstream block.
+
+    * Directives like "server" MUST NOT be mixed with
+      "drizzle_server" either.
+
+    * Upstream backends that don't use "drizzle_server" to
+      define server entries MUST NOT be used in the
+      "drizzle_pass" directive.
+
+Directives
+
+    drizzle_server <host>:<port> dbname=<dbname> password=<password> user=<user> protocol=<protocol>
+        protocol can be either "mysql" or "drizzle".
+
+    drizzle_query <sql>
+
+    drizzle_connect_timeout <time>
+        <time> can be an integer, with an optional time unit, like "s", "ms", "m".
+        The default time unit is "s", ie, "second".
+
+        default setting is "60 s".
+
+    drizzle_send_query_timeout <time>
+
+        default setting is "60 s".
+
+    drizzle_recv_cols_timeout <time>
+        default setting is "60 s".
+
+    drizzle_recv_rows_timeout <time>
+        default setting is "60 s".
+
+    drizzle_buffer_size <size>
+        the buffer size for drizzle outputs. default to the page size (4k/8k).
+        the larger the buffer, the less streammy the outputing process will be.
+
+    drizzle_module_header on|off
+        controls whether to output the drizzle header in the response.
+        default on.
+        a drizzle header looks like this:
+
+            X-Resty-DBD-Module: ngx_drizzle 0.0.14
+
+Output
+    This module generates binary query results in a format
+    that will be shared among the various nginx database
+    driver modules like ngx_postgresql and ngx_oracle.
+    This data format is named "Resty DBD Stream" (RDS).
+
+    If you're a web app developer, you may be more interested
+    in using a source filter module like ngx_rds_json module
+    ( http://github.com/agentzh/rds-json-nginx-module ) to
+    obtain JSON output.
+
+    For the HTTP response header part, the 200 OK status
+    code should always be returned.
+
+    The Content-Type header MUST be set to
+    "application/x-resty-dbd-stream" (without quotes).
+
+    And the driver generating this response is also set a
+    X-Resty-DBD header. For instance, this
+    module adds the following output header:
+
+        X-Resty-DBD-Module: drizzle 0.0.1
+
+    where 0.0.1 is this module's own version number. This
+    X-Resty-DBD-Module header is optional though.
+
+    Below is the HTTP response body format (version 0.0.3):
+
+    Header part
+        uint8_t        endian type (1 means big-endian and little
+                       endian otherwise)
+
+        uint32_t       format version
+                       (v1.2.3 is represented as 1002003 in
+                        decimal)
+
+        uint8_t        result type
+                       (0 means normal SQL result type,
+                        fixed for now)
+
+        uint16_t       standard error code
+        uint16_t       driver-specific error code
+
+        uint16_t       driver-specific error string length
+        u_char*        driver-specific error string data
+
+        uint64_t       database rows affected
+        uint64_t       insert id (if none, 0)
+        uint16_t       column count
+
+    Body part
+
+      when the "column count" field in the Header part
+      is zero, then the whole body part is omitted.
+
+      0*Column (number of columns is determined by "column count")
+
+        uint16_t        non-zero value for standard column type
+                        code and for the column list
+                        terminatoandr otherwise.
+        uint16_t        driver-specific column type code
+        uint16_t        column name length
+        u_char*         column name data
+
+      0*Row (terminated by 8-bit zero)
+
+        uint8_t         valid row (1 means valid, and 0 means
+                        the row list terminator)
+
+        0*Field (count is predetermined by column number)
+            uint32_t        field length ((uint32_t) -1 represents NULL)
+            uint8_t*        field data (in textual representation), is empty
+                            if field length == (uint32_t) -1
+
+    On the nginx output chain link level, the following
+    components should be put into a single ngx_buf_t struct:
+
+        * the header
+
+        * each column and the column list terminator
+
+        * each row's valid flag byte and row list terminator
+
+        * each field in each row (if any) but the field data
+          can span multiple bufs
+
+Trouble Shooting
+    When you see the following error message in error.log:
+
+       failed to connect: 15: drizzle_state_handshake_result_read:
+           old insecure authentication mechanism not supported in upstream
+
+    then you may checkout if your mysql is too old (at least 5.x is required)
+    or your mysql config file explicitly forces the use of old authentication
+    method (you should remove the "old-passwords" line from your my.cnf and
+    add the line "secure_auth 1").
+
+Installation
+    * You should first install libdrizzle 0.8 which can be
+        obtained from here:
+
+        https://launchpad.net/libdrizzle
+
+    * Use the following patch in order to fix two serious bugs in
+        libdrizzle:
+
+        http://agentzh.org/misc/nginx/libdrizzle-0.8-parsebug_and_mac_fixes.patch
+
+    * Download the latest version of the release tarball of this module from
+    drizzle-nginx-module file list
+    (<http://github.com/agentzh/drizzle-nginx-module/downloads>).
+
+    * Grab the nginx source code from nginx.net (<http://nginx.net/>), for
+        example, the version 0.8.41 (see nginx compatibility), and then build
+        the source with this module:
+
+        $ wget 'http://sysoev.ru/nginx/nginx-0.8.41.tar.gz'
+        $ tar -xzvf nginx-0.8.41.tar.gz
+        $ cd nginx-0.8.41/
+
+        # Here we assume you would install you nginx under /opt/nginx/.
+        $ ./configure --prefix=/opt/nginx \
+            --add-module=/path/to/drizzle-nginx-module
+
+        $ make -j2
+        $ make install
+
+Compatibility
+    If you're using mysql, then at least mysql 5.x is required.
+
+    The following versions of Nginx should work with this module:
+
+    *   0.8.x (last tested: 0.8.53)
+
+    *   0.7.x >= 0.7.44 (last tested version is 0.7.67)
+
+    Earlier versions of Nginx like 0.6.x and 0.5.x will *not* work.
+
+    If you find that any particular version of Nginx above 0.7.44 does not
+    work with this module, please consider reporting a bug.
+
+TODO
+    *   add the mysql transaction support.
+    *   add multi-statement mysql query support.
+    *   implement the "drizzle_max_output_size" directive.
+        When the RDS data is larger then the size specified,
+        the module will try to terminate the output as quickly
+        as possible but will still ensure the resulting
+        response body is still in valid RDS format.
+
+    *   implement the "drizzle_upstream_next" mechanism for
+        failover support.
+
+    *   add support for multiple "drizzle_query" directives
+        in a single location.
+
+    *   implement *weighted* round-robin algorithm for the
+        upstream server clusters.
+
+    *   add the "max_idle_time" option to the "drizzle_server"
+        directive, so that the connection pool will automatically
+        release idle connections for the timeout you specify.
+
+    *   add the "min" option to the "drizzle_server" directive
+        so that the connection pool will automatically create
+        that number of connections and put them into the pool.
+
+    *   Unix domain socket support in the "drizzle_server"
+        directive.
+
+    *   Make the "drizzle_query" directive reject variables that
+        have not been processed by a drizzle_process directive.
+        This will pretect us from SQL injections. There will
+        also be an option ("strict=no") to disable such checks.
+
+Known Issues
+    *   Calling mysql procedures are currently not supported because
+        the underlying libdrizzle library does not support the
+        CLIENT_MULTI_RESULTS flag yet :( But we'll surely work on it.
+
+    *   Multiple SQL statements in a single query are not supported
+        due to the lack of CLIENT_MULTI_STATEMENTS support in the
+        underlying libdrizzle library.
+
+    *   This module does not (yet) work with the RTSIG event model.
+
+See Also
+    *   the ngx_rds_json module
+        ( http://github.com/agentzh/rds-json-nginx-module )
+
+Authors
+    chaoslawful (王晓哲) <chaoslawful at gmail dot com>,
+    agentzh (章亦春) <agentzh at gmail dot com>,
+    Piotr Sikora <piotr.sikora at frickle dot com>.
+
+Copyright & License
+    The implementation of the builtin connection pool has borrowed
+    a lot of code from Maxim Dounin's upstream_keepalive module.
+    This part of code is copyrighted by Maxim Dounin.
+
+    I also borrowed a lot of code from ngx_http_upstream.c and
+    ngx_http_memcached_module.c in the nginx 0.8.30 core. This
+    part of code is copyrighted by Igor Sysoev.
+
+    This module is licenced under the BSD license.
+
+    Copyright (c) 2009-2010, Taobao Inc., Alibaba Group ( http://www.taobao.com ).
+
+    Copyright (c) 2009-2010, Xiaozhe Wang (chaoslawful) <chaoslawful@gmail.com>.
+
+    Copyright (C) 2009-2010, Yichun Zhang (agentzh) <agentzh@gmail.com>.
+
+    Copyright (C) 2010, FRiCKLE Piotr Sikora <info@frickle.com>.
+
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+        * Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+        * Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in the
+        documentation and/or other materials provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+    TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+

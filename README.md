@@ -1,11 +1,10 @@
+Status update: do not use: use https://github.com/FRiCKLE/ngx_zeromq instead...
+
 Name
 ====
     ngx_zeromq - an upstream module that talks to
         mysql, zeromq, and sqlite3 by libzeromq
 
-Status
-======
-    This module is in development!
 
 Synopsis
 ========
